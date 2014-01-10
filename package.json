@@ -1,0 +1,16 @@
+{
+  "name": "DotsOnAMap",
+  "version": "0.0.0",
+  "description": "Utility to generate a PNG of geographical points",
+  "main": "index.js",
+  "repository": "",
+  "author": "Sean Connelley",
+  "dependencies": {
+    "pg": "~2.8.5",
+    "pg-query-stream": "~0.2.0",
+    "node-postgres-hstore": "~0.0.4",
+    "optimist": "~0.6.0",
+    "d3": "~3.3.13",
+    "canvas": "~1.1.3"
+  }
+}
