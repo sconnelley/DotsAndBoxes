@@ -4,30 +4,43 @@
     node index.js -w 5000 -h 5000 -c 'CONNECTION_STRING' \
     -q 'QUERY_STRING'
 
+
+    node index.js  --csv fpboxes.csv --bbox --bcolor 'rgba(255,255,255,1)' --stroke 'rgba(0,0,0,0.1)' -w 4000 -h 3000
 */
 
 var argv = require('optimist')
-    .usage('Draw points on a map!')
-    .demand('c')
+    .usage('Draw points & boxes on a map!')
     .alias('c', 'conn')
     .describe('c', 'Postgres connection string')
-    .demand('q')
     .alias('q', 'query')
-    .describe('q', 'Postgres query string. Row object needs to contain a lat & lng property.')
+    .describe('q', 'Postgres query string. Row objects need to contain a lat & lng property.')
+    .describe('csv', 'CSV file')
+    .boolean('bbox')
+    .describe('bbox', 'Draw bounding boxes. Row objects must have north, west, south, east properties.')
     .default('w', 2000)
     .default('h', 2000)
-    .describe('w', 'Map width')
-    .describe('h', 'Map height')
+    .describe('w', 'Canvas width')
+    .describe('h', 'Canvas height')
+    .default('bcolor', 'rgba(44,44,44,1)')
+    .describe('bcolor', 'Canvas background color')
+    .default('stroke', 'rgba(255,255,255,0.1)')
+    .describe('stroke', 'Canvas strokeStyle')
+    .default('fill', 'rgba(255,255,255,0.1)')
+    .describe('fill', 'Canvas fillStyle')
+    .describe('world', 'World outline strokeStyle')
+    .describe('extent', 'Extent lineStyle')
+    .describe('alpha', 'Canvas global alpha value for drawing input data')
+    .default('alpha', 1.0)
     .argv;
 
 
 var pg = require('pg'),
+    csv = require("fast-csv"),
     hstore = require('node-postgres-hstore'),
     QueryStream = require('pg-query-stream'),
     d3 = require('d3'),
     fs = require('fs'),
     Canvas = require('canvas');
-
 
 var width = argv.w,
     height = argv.h,
@@ -35,10 +48,10 @@ var width = argv.w,
     canvas = new Canvas(width, height),
     ctx = canvas.getContext('2d');
 
-
-// fill background
-ctx.fillStyle = "rgba(44,44,44,1)";
-ctx.fillRect(0, 0, width, height);
+var counter = 0;
+var startTime,endTime;
+var drawWorldOutline = (argv.world) ? true : false;
+var drawWorldExtent = (argv.extent) ? true : false;
 
 
 var projection = d3.geo.mercator()
@@ -47,60 +60,118 @@ var projection = d3.geo.mercator()
 
 setScaleTranslate(width, height, extent, projection);
 
-drawExtent(extent);
+var path = d3.geo.path()
+    .projection(projection)
+    .context(ctx);
 
-/* Load & draw points */
-// set point color
-ctx.fillStyle = "rgba(255,255,255,.1)";
+// fill background
+ctx.fillStyle = argv.bcolor;
+ctx.fillRect(0, 0, width, height);
 
-// stream
-var counter = 0;
-var startTime,endTime;
-pg.connect(argv.conn, function(err, client, done) {
-    if(err) throw err;
-    var stream = new QueryStream(argv.query);
-    var query = client.query(stream);
+if (drawWorldExtent) drawExtent(extent);
 
-    stream.on('readable', function() {
-        var res = stream.read();
-        counter++;
+if (drawWorldOutline) {
+    fs.readFile('./data/countries.geojson', function(err, data) {
+        if (err) throw err;
 
-        if (res.hasOwnProperty('time')) {
-            if(!startTime) startTime = res.time;
-            endTime = res.time;
-        }
+        ctx.strokeStyle = argv.world;
+        path(JSON.parse(data));
+        ctx.stroke();
 
-        drawPoint(res);
+        drawInputData();
     });
+} else {
+    drawInputData();
+}
 
-    stream.on('end', function(){
-        client.end();
+function drawInputData() {
+    ctx.fillStyle = argv.fill;
+    ctx.strokeStyle = argv.stroke;
 
-        console.log("Processed -> ", counter);
-        console.log("Start / End -> ", startTime, endTime);
+    ctx.globalAlpha = argv.alpha;
+    //ctx.globalCompositeOperation = "overlay";
 
+    if (argv.csv) {
+        processCSV(savePNG);
+    } else if (argv.conn && argv.query) {
+        processPostgres(savePNG);
+    } else {
         savePNG();
-    });
-});
-
-
-/*
-var client = new pg.Client(PG_CONN);
-client.connect(function(err) {
-  if(err) {
-    return console.error('could not connect to postgres', err);
-  }
-  client.query('select ST_X(latlon) as lng, ST_Y(latlon) as lat, time from messages where latlon is not null order by time desc limit 100000', function(err, result) {
-    if(err) {
-      return console.error('error running query', err);
     }
-    if (result && result.rows && result.rows.length) drawPoints(result.rows);
+}
 
+function validBBOX(bbox) {
+    if (bbox[0][0] < extent[0][0]) return false;
+    if (bbox[0][1] < extent[0][1]) return false;
+    if (bbox[1][0] > extent[1][0]) return false;
+    if (bbox[1][1] > extent[1][1]) return false;
+    return true;
+}
 
-    client.end();
-  });
-});
-*/
+function processCSV(callback) {
+    csv
+    .fromPath(argv.csv,{
+        delimiter: '\t',
+        headers: true
+    })
+    .on("data", function(data){
+        if (argv.bbox) {
+            var bbox = [[+data.west, +data.south], [+data.east, +data.north]];
+            if(validBBOX(bbox)) {
+                drawBBOX(bbox);
+                counter++;
+            }
+        } else {
+            drawPoint(data); // must have `lat` & `lng` property
+            counter++;
+        }
+    })
+    .on("end", function(){
+        console.log("Processed -> ", counter);
+        callback();
+    });
+}
+
+function processPostgres(callback) {
+    pg.connect(argv.conn, function(err, client, done) {
+        if(err) throw err;
+        var stream = new QueryStream(argv.query);
+        var query = client.query(stream);
+
+        stream.on('readable', function() {
+            var res = stream.read();
+            counter++;
+
+            if (res.hasOwnProperty('time')) {
+                if(!startTime) startTime = res.time;
+                endTime = res.time;
+            }
+
+            drawPoint(res);
+        });
+
+        stream.on('end', function(){
+            client.end();
+
+            console.log("Processed -> ", counter);
+            console.log("Start / End -> ", startTime, endTime);
+
+            callback();
+        });
+    });
+}
+
+function drawBBOX(extent) {
+    var sw = projection(extent[0]),
+        ne = projection(extent[1]),
+        left = sw[0],
+        top = ne[1],
+        right = ne[0],
+        bottom = sw[1];
+
+    ctx.strokeRect(left, top, Math.abs(left-right), Math.abs(top-bottom));
+}
+
 
 function drawExtent(extent) {
 
@@ -111,7 +182,7 @@ function drawExtent(extent) {
         right = ne[0],
         bottom = sw[1];
 
-    ctx.lineStyle = "rgba(255,255,255,0.4)";
+    ctx.lineStyle = argv.extent;
     ctx.beginPath();
 
     ctx.moveTo(left, 0);
@@ -134,13 +205,25 @@ function drawExtent(extent) {
 function setScaleTranslate(width, height, extent, projection) {
     var sw = projection(extent[0]),
         ne = projection(extent[1]),
-        left = sw[0],
-        top = ne[1],
-        right = ne[0],
-        bottom = sw[1],
-        pixelBounds = [[left, bottom], [right, top]],
-        scale = .95 / Math.max((pixelBounds[1][0] - pixelBounds[0][0]) / width, (pixelBounds[1][1] - pixelBounds[0][1]) / height),
-        translate = [(width - scale * (pixelBounds[1][0] + pixelBounds[0][0])) / 2, (height - scale * (pixelBounds[1][1] + pixelBounds[0][1])) / 2];
+        pixelBounds = [[sw[0], sw[1]], [ne[0], ne[1]]],
+        dx = pixelBounds[1][0] - pixelBounds[0][0],
+        dy = pixelBounds[1][1] - pixelBounds[0][1],
+        x = (pixelBounds[0][0] + pixelBounds[1][0]) / 2,
+        y = (pixelBounds[0][1] + pixelBounds[1][1]) / 2,
+        scale = .9 / Math.max(dx / width, dy / height),
+        translate = [width / 2 - scale * x, height / 2 - scale * y];
+
+    projection.scale(scale).translate(translate);
+}
+
+function setScaleTranslateFromFeatures(features,width, height, projection) {
+    var bounds = path.bounds(features),
+        dx = bounds[1][0] - bounds[0][0],
+        dy = bounds[1][1] - bounds[0][1],
+        x = (bounds[0][0] + bounds[1][0]) / 2,
+        y = (bounds[0][1] + bounds[1][1]) / 2,
+        scale = .9 / Math.max(dx / width, dy / height),
+        translate = [width / 2 - scale * x, height / 2 - scale * y];
 
     projection.scale(scale).translate(translate);
 }
