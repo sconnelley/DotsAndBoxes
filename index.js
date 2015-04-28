@@ -1,11 +1,13 @@
 /*
     DotsOnAMap
 
+    # Using Postgres
     node index.js -w 5000 -h 5000 -c 'CONNECTION_STRING' \
     -q 'QUERY_STRING'
 
-
-    node index.js  --csv fpboxes.csv --bbox --bcolor 'rgba(255,255,255,1)' --stroke 'rgba(0,0,0,0.1)' -w 4000 -h 3000
+    # Using CSV
+    node index.js  --csv data/sample/boxes.csv --bbox --bcolor 'rgba(255,255,255,1)' \
+    --stroke 'rgba(0,0,0,0.1)' -w 4000 -h 3000 --world 'rgba(0,0,0,0.3)'
 */
 
 var argv = require('optimist')
@@ -58,7 +60,7 @@ var projection = d3.geo.mercator()
     .scale(1)
     .translate([0,0]);
 
-setScaleTranslate(width, height, extent, projection);
+setScaleTranslate();
 
 var path = d3.geo.path()
     .projection(projection)
@@ -116,15 +118,11 @@ function processCSV(callback) {
     })
     .on("data", function(data){
         if (argv.bbox) {
-            var bbox = [[+data.west, +data.south], [+data.east, +data.north]];
-            if(validBBOX(bbox)) {
-                drawBBOX(bbox);
-                counter++;
-            }
+            drawBBOX(data);
         } else {
             drawPoint(data); // must have `lat` & `lng` property
-            counter++;
         }
+        counter++;
     })
     .on("end", function(){
         console.log("Processed -> ", counter);
@@ -147,7 +145,11 @@ function processPostgres(callback) {
                 endTime = res.time;
             }
 
-            drawPoint(res);
+            if (argv.bbox) {
+                drawBBOX(res);
+            } else {
+                drawPoint(res);
+            }
         });
 
         stream.on('end', function(){
@@ -161,9 +163,52 @@ function processPostgres(callback) {
     });
 }
 
-function drawBBOX(extent) {
+function setScaleTranslate() {
     var sw = projection(extent[0]),
         ne = projection(extent[1]),
+        pixelBounds = [[sw[0], sw[1]], [ne[0], ne[1]]],
+        dx = pixelBounds[1][0] - pixelBounds[0][0],
+        dy = pixelBounds[1][1] - pixelBounds[0][1],
+        x = (pixelBounds[0][0] + pixelBounds[1][0]) / 2,
+        y = (pixelBounds[0][1] + pixelBounds[1][1]) / 2,
+        scale = .9 / Math.max(dx / width, dy / height),
+        translate = [width / 2 - scale * x, height / 2 - scale * y];
+
+    projection.scale(scale).translate(translate);
+}
+
+function setScaleTranslateFromFeatures(features) {
+    var bounds = path.bounds(features),
+        dx = bounds[1][0] - bounds[0][0],
+        dy = bounds[1][1] - bounds[0][1],
+        x = (bounds[0][0] + bounds[1][0]) / 2,
+        y = (bounds[0][1] + bounds[1][1]) / 2,
+        scale = .9 / Math.max(dx / width, dy / height),
+        translate = [width / 2 - scale * x, height / 2 - scale * y];
+
+    projection.scale(scale).translate(translate);
+}
+
+function drawPoint(pt) {
+    var px = projection([pt.lng, pt.lat]);
+    ctx.fillRect(px[0], px[1], 1, 1);
+}
+
+function drawPoints(points) {
+
+    points.forEach(function(pt){
+        var px = projection([pt.lng, pt.lat]);
+        ctx.fillRect(px[0], px[1], 1, 1);
+    });
+
+}
+
+function drawBBOX(data) {
+    var bbox = [[+data.west, +data.south], [+data.east, +data.north]];
+    if(!validBBOX(bbox)) return;
+
+    var sw = projection(bbox[0]),
+        ne = projection(bbox[1]),
         left = sw[0],
         top = ne[1],
         right = ne[0],
@@ -172,9 +217,7 @@ function drawBBOX(extent) {
     ctx.strokeRect(left, top, Math.abs(left-right), Math.abs(top-bottom));
 }
 
-
 function drawExtent(extent) {
-
     var sw = projection(extent[0]),
         ne = projection(extent[1]),
         left = sw[0],
@@ -199,47 +242,6 @@ function drawExtent(extent) {
 
     ctx.closePath();
     ctx.stroke();
-}
-
-// only tested for mercator
-function setScaleTranslate(width, height, extent, projection) {
-    var sw = projection(extent[0]),
-        ne = projection(extent[1]),
-        pixelBounds = [[sw[0], sw[1]], [ne[0], ne[1]]],
-        dx = pixelBounds[1][0] - pixelBounds[0][0],
-        dy = pixelBounds[1][1] - pixelBounds[0][1],
-        x = (pixelBounds[0][0] + pixelBounds[1][0]) / 2,
-        y = (pixelBounds[0][1] + pixelBounds[1][1]) / 2,
-        scale = .9 / Math.max(dx / width, dy / height),
-        translate = [width / 2 - scale * x, height / 2 - scale * y];
-
-    projection.scale(scale).translate(translate);
-}
-
-function setScaleTranslateFromFeatures(features,width, height, projection) {
-    var bounds = path.bounds(features),
-        dx = bounds[1][0] - bounds[0][0],
-        dy = bounds[1][1] - bounds[0][1],
-        x = (bounds[0][0] + bounds[1][0]) / 2,
-        y = (bounds[0][1] + bounds[1][1]) / 2,
-        scale = .9 / Math.max(dx / width, dy / height),
-        translate = [width / 2 - scale * x, height / 2 - scale * y];
-
-    projection.scale(scale).translate(translate);
-}
-
-function drawPoint(pt) {
-    var px = projection([pt.lng, pt.lat]);
-    ctx.fillRect(px[0], px[1], 1, 1);
-}
-
-function drawPoints(points) {
-
-    points.forEach(function(pt){
-        var px = projection([pt.lng, pt.lat]);
-        ctx.fillRect(px[0], px[1], 1, 1);
-    });
-
 }
 
 function savePNG() {
