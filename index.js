@@ -8,33 +8,19 @@
     # Using CSV
     node index.js  --csv data/sample/boxes.csv --bbox --bcolor 'rgba(255,255,255,1)' \
     --stroke 'rgba(0,0,0,0.1)' -w 4000 -h 3000 --world 'rgba(0,0,0,0.3)'
+
+
+
+
+    node index.js -c africa.js
 */
 
 var argv = require('optimist')
     .usage('Draw points & boxes on a map!')
-    .alias('c', 'conn')
-    .describe('c', 'Postgres connection string')
-    .alias('q', 'query')
-    .describe('q', 'Postgres query string. Row objects need to contain a lat & lng property.')
-    .describe('csv', 'CSV file')
-    .boolean('bbox')
-    .describe('bbox', 'Draw bounding boxes. Row objects must have north, west, south, east properties.')
-    .default('w', 2000)
-    .default('h', 2000)
-    .describe('w', 'Canvas width')
-    .describe('h', 'Canvas height')
-    .default('bcolor', 'rgba(44,44,44,1)')
-    .describe('bcolor', 'Canvas background color')
-    .default('stroke', 'rgba(255,255,255,0.1)')
-    .describe('stroke', 'Canvas strokeStyle')
-    .default('fill', 'rgba(255,255,255,0.1)')
-    .describe('fill', 'Canvas fillStyle')
-    .describe('world', 'World outline strokeStyle')
-    .describe('extent', 'Extent lineStyle')
-    .describe('alpha', 'Canvas global alpha value for drawing input data')
-    .default('alpha', 1.0)
+    .alias('c', 'config')
+    .demand('c')
+    .describe('c', 'Config file')
     .argv;
-
 
 var pg = require('pg'),
     csv = require("fast-csv"),
@@ -42,60 +28,82 @@ var pg = require('pg'),
     QueryStream = require('pg-query-stream'),
     d3 = require('d3'),
     fs = require('fs'),
+    pathModule = require('path'),
     Canvas = require('canvas');
 
-var width = argv.w,
-    height = argv.h,
-    extent = [[-180, -85], [180, 85]], // [sw, ne]
+var config = require(pathModule.resolve(argv.c));
+
+var width = config.width || 2000,
+    height = config.height || 2000,
+    extent = config.extent || [[-180, -85], [180, 85]], // [sw, ne]
+    backgroundColor = config.background || 'rgba(255,255,255,1)',
+    worldColor = config.worldColor || null,
+    extentColor = config.extentColor || null,
+    fillColor = config.fill || 'rgba(0,0,0,0.1)',
+    strokeColor = config.stroke || 'rgba(0,0,0,0.1)',
+    globalAlpha = config.alpha || 1.0,
+    worldFile = config.worldFile || './data/geo/countries.geojson',
+    fitToFeatures = config.fitToFeatures || false,
+    imageName = config.imageName || 'test.png',
+    bbox = config.bbox || false,
     canvas = new Canvas(width, height),
     ctx = canvas.getContext('2d');
 
 var counter = 0;
-var startTime,endTime;
-var drawWorldOutline = (argv.world) ? true : false;
-var drawWorldExtent = (argv.extent) ? true : false;
-
 
 var projection = d3.geo.mercator()
     .scale(1)
     .translate([0,0]);
 
-setScaleTranslate();
-
 var path = d3.geo.path()
     .projection(projection)
     .context(ctx);
 
-// fill background
-ctx.fillStyle = argv.bcolor;
-ctx.fillRect(0, 0, width, height);
+// ------------------------- //
+run();
+// ------------------------- //
 
-if (drawWorldExtent) drawExtent(extent);
+function run() {
+    // scale to extent
+    if (!fitToFeatures) setScaleTranslate();
 
-if (drawWorldOutline) {
-    fs.readFile('./data/countries.geojson', function(err, data) {
-        if (err) throw err;
+    // fill background
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, width, height);
 
-        ctx.strokeStyle = argv.world;
-        path(JSON.parse(data));
-        ctx.stroke();
+    if (extentColor) drawExtent(extent);
 
+    if (worldColor || fitToFeatures) {
+        fs.readFile(worldFile, function(err, data) {
+            if (err) throw err;
+            var features = JSON.parse(data);
+            if (fitToFeatures) {
+                setScaleTranslateFromFeatures(features);
+            }
+            if(worldColor) {
+                ctx.strokeStyle = worldColor;
+                path(features);
+                ctx.stroke();
+            }
+            drawInputData();
+        });
+    } else {
         drawInputData();
-    });
-} else {
-    drawInputData();
+    }
 }
 
-function drawInputData() {
-    ctx.fillStyle = argv.fill;
-    ctx.strokeStyle = argv.stroke;
 
-    ctx.globalAlpha = argv.alpha;
+
+function drawInputData() {
+    ctx.fillStyle = fillColor;
+    ctx.strokeStyle = strokeColor;
+
+    ctx.globalAlpha = globalAlpha;
     //ctx.globalCompositeOperation = "overlay";
 
-    if (argv.csv) {
+    if (config.csvFile) {
         processCSV(savePNG);
-    } else if (argv.conn && argv.query) {
+    } else if (config.pgConnection && config.pgQuery) {
         processPostgres(savePNG);
     } else {
         savePNG();
@@ -111,14 +119,20 @@ function validBBOX(bbox) {
 }
 
 function processCSV(callback) {
+    var clr;
     csv
-    .fromPath(argv.csv,{
+    .fromPath(config.csvFile,{
         delimiter: '\t',
         headers: true
     })
     .on("data", function(data){
-        if (argv.bbox) {
-            drawBBOX(data);
+        if (typeof config.colorizer === 'function') {
+            clr = config.colorizer(data);
+        } else {
+            clr = strokeColor;
+        }
+        if (bbox) {
+            drawBBOX(data, clr);
         } else {
             drawPoint(data); // must have `lat` & `lng` property
         }
@@ -131,21 +145,16 @@ function processCSV(callback) {
 }
 
 function processPostgres(callback) {
-    pg.connect(argv.conn, function(err, client, done) {
+    pg.connect(config.pgConnection, function(err, client, done) {
         if(err) throw err;
-        var stream = new QueryStream(argv.query);
+        var stream = new QueryStream(config.pgQuery);
         var query = client.query(stream);
 
         stream.on('readable', function() {
             var res = stream.read();
             counter++;
 
-            if (res.hasOwnProperty('time')) {
-                if(!startTime) startTime = res.time;
-                endTime = res.time;
-            }
-
-            if (argv.bbox) {
+            if (bbox) {
                 drawBBOX(res);
             } else {
                 drawPoint(res);
@@ -156,8 +165,6 @@ function processPostgres(callback) {
             client.end();
 
             console.log("Processed -> ", counter);
-            console.log("Start / End -> ", startTime, endTime);
-
             callback();
         });
     });
@@ -185,7 +192,7 @@ function setScaleTranslateFromFeatures(features) {
         y = (bounds[0][1] + bounds[1][1]) / 2,
         scale = .9 / Math.max(dx / width, dy / height),
         translate = [width / 2 - scale * x, height / 2 - scale * y];
-
+    console.log(bounds);
     projection.scale(scale).translate(translate);
 }
 
@@ -203,7 +210,7 @@ function drawPoints(points) {
 
 }
 
-function drawBBOX(data) {
+function drawBBOX(data, clr) {
     var bbox = [[+data.west, +data.south], [+data.east, +data.north]];
     if(!validBBOX(bbox)) return;
 
@@ -214,6 +221,7 @@ function drawBBOX(data) {
         right = ne[0],
         bottom = sw[1];
 
+    ctx.strokeStyle = clr;
     ctx.strokeRect(left, top, Math.abs(left-right), Math.abs(top-bottom));
 }
 
@@ -225,7 +233,7 @@ function drawExtent(extent) {
         right = ne[0],
         bottom = sw[1];
 
-    ctx.lineStyle = argv.extent;
+    ctx.lineStyle = extentColor;
     ctx.beginPath();
 
     ctx.moveTo(left, 0);
@@ -245,7 +253,7 @@ function drawExtent(extent) {
 }
 
 function savePNG() {
-    var out = fs.createWriteStream(__dirname + '/test.png');
+    var out = fs.createWriteStream(__dirname + '/' + imageName);
 
     var stream = canvas.pngStream();
 
