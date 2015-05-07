@@ -1,18 +1,8 @@
 /*
-    DotsOnAMap
+    DotsAndBoxes
 
-    # Using Postgres
-    node index.js -w 5000 -h 5000 -c 'CONNECTION_STRING' \
-    -q 'QUERY_STRING'
-
-    # Using CSV
-    node index.js  --csv data/sample/boxes.csv --bbox --bcolor 'rgba(255,255,255,1)' \
-    --stroke 'rgba(0,0,0,0.1)' -w 4000 -h 3000 --world 'rgba(0,0,0,0.3)'
-
-
-
-
-    node index.js -c africa.js
+    Usage:
+    node index.js -c config.js
 */
 
 var argv = require('optimist')
@@ -36,6 +26,7 @@ var config = require(pathModule.resolve(argv.c));
 var width = config.width || 2000,
     height = config.height || 2000,
     extent = config.extent || [[-180, -85], [180, 85]], // [sw, ne]
+    fitToBox = config.fitToBox || null,
     backgroundColor = config.background || 'rgba(255,255,255,1)',
     worldColor = config.worldColor || null,
     extentColor = config.extentColor || null,
@@ -64,8 +55,11 @@ run();
 // ------------------------- //
 
 function run() {
+    console.log('Starting   -> %s', new Date());
     // scale to extent
-    if (!fitToFeatures) setScaleTranslate();
+    if (!fitToFeatures && !fitToBox) setScaleTranslate(extent);
+
+    if (fitToBox && !fitToFeatures) setScaleTranslate(fitToBox);
 
     // fill background
     ctx.fillStyle = backgroundColor;
@@ -91,8 +85,6 @@ function run() {
         drawInputData();
     }
 }
-
-
 
 function drawInputData() {
     ctx.fillStyle = fillColor;
@@ -139,7 +131,6 @@ function processCSV(callback) {
         counter++;
     })
     .on("end", function(){
-        console.log("Processed -> ", counter);
         callback();
     });
 }
@@ -163,16 +154,14 @@ function processPostgres(callback) {
 
         stream.on('end', function(){
             client.end();
-
-            console.log("Processed -> ", counter);
             callback();
         });
     });
 }
 
-function setScaleTranslate() {
-    var sw = projection(extent[0]),
-        ne = projection(extent[1]),
+function setScaleTranslate(ext) {
+    var sw = projection(ext[0]),
+        ne = projection(ext[1]),
         pixelBounds = [[sw[0], sw[1]], [ne[0], ne[1]]],
         dx = pixelBounds[1][0] - pixelBounds[0][0],
         dy = pixelBounds[1][1] - pixelBounds[0][1],
@@ -192,7 +181,6 @@ function setScaleTranslateFromFeatures(features) {
         y = (bounds[0][1] + bounds[1][1]) / 2,
         scale = .9 / Math.max(dx / width, dy / height),
         translate = [width / 2 - scale * x, height / 2 - scale * y];
-    console.log(bounds);
     projection.scale(scale).translate(translate);
 }
 
@@ -202,9 +190,9 @@ function drawPoint(pt) {
 }
 
 function drawPoints(points) {
-
+    var px;
     points.forEach(function(pt){
-        var px = projection([pt.lng, pt.lat]);
+        px = projection([pt.lng, pt.lat]);
         ctx.fillRect(px[0], px[1], 1, 1);
     });
 
@@ -253,16 +241,18 @@ function drawExtent(extent) {
 }
 
 function savePNG() {
+    console.log("Processed  -> %s rows", counter);
+    console.log('Writing    -> %s', imageName);
     var out = fs.createWriteStream(__dirname + '/' + imageName);
 
     var stream = canvas.pngStream();
 
     stream.on('data', function(chunk){
-      out.write(chunk);
+        out.write(chunk);
     });
 
     stream.on('end', function(){
-      console.log('saved png');
+        console.log('Finished   -> %s', new Date());
     });
 }
 

@@ -5,13 +5,14 @@ module.exports = {
   bbox: false, // Draw boxes instead of points (need columns: west, east, south, west)
   width: 4000,
   height: 3000,
-  extent: [[-180, -85], [180, 85]], // Restrict data to this extent as well as scale map to fit this extent.
-  background: 'rgba(255,255,255,1)', // Color for Canvas
+  extent: [[-180, -85], [180, 85]], // Restrict data to this extent as well as scale canvas to fit this extent.
+  fitToBox: null, // Scale canvas to fit this box
+  background: 'rgba(255,255,255,1)', // Color for canvas
   stroke: 'rgba(0,0,0,0.1)', // Stroke color for box data
   fill: 'rgba(255,255,255,0.1)', // Fill color for point data
   worldFile: null, // Geojson geography file that can be used to draw an outline behind the data
-  worldColor: 'rgba(0,0,0,0.3)', // Color to draw the features in the `worldFile`
-  fitToFeatures: false, // Will use the features in the `worldFile` to set scale. Useful for zooming to a particular region.
+  worldColor: 'rgba(0,0,0,0.3)', // Color to stroke the features in the `worldFile`
+  fitToFeatures: false, // Will use the features in the `worldFile` to set scale of canvas. Useful for zooming to a particular region.
   extentColor: null, // draw extent in this color.  Null = don't draw
   alpha: 1.0, // global alpha for Canvas context
   imageName: 'test.png', // the output image filename
